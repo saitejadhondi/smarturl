@@ -1,22 +1,19 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartURL</title>
-    <link rel="stylesheet" href="style.css">
-</head>
-<body>
-    <main class="container">
-        <h1>SmartURL</h1>
-        <p>Intelligent URL Shortener</p>
-        <form id="urlForm">
-            <input id="url" type="url" placeholder="Enter long URL" required>
-            <input id="alias" type="text" placeholder="Custom alias (optional)">
-            <button type="submit">Shorten URL</button>
-        </form>
-        <div id="result"></div>
-    </main>
-    <script src="app.js"></script>
-</body>
-</html>
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SmartURL Dashboard</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="container"><h1>SmartURL</h1><p>Short URLs, analytics and QR codes</p>
+<section class="card"><h2>Create Short URL</h2><form id="form">
+<input id="url" type="url" placeholder="https://example.com" required>
+<input id="alias" placeholder="custom alias (optional)">
+<input id="expires" type="datetime-local">
+<button>Create</button></form><pre id="result"></pre></section>
+<section class="card"><h2>Analytics</h2><div class="row"><input id="code" placeholder="python"><button onclick="loadAnalytics()">Load</button></div><pre id="analytics"></pre></section>
+<section class="card"><h2>QR Code</h2><div class="row"><input id="qrCode" placeholder="python"><button onclick="makeQR()">Generate</button></div><img id="qr" alt="QR code"></section>
+</main><script>
+form.onsubmit=async e=>{e.preventDefault();let x=document.getElementById("expires").value;
+let body={url:url.value,custom_alias:alias.value||null,expires_at:x?new Date(x).toISOString():null};
+let r=await fetch("/urls",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+result.textContent=JSON.stringify(await r.json(),null,2)};
+async function loadAnalytics(){let r=await fetch("/analytics/"+encodeURIComponent(code.value));analytics.textContent=JSON.stringify(await r.json(),null,2)}
+function makeQR(){qr.src="/qr/"+encodeURIComponent(qrCode.value)+"?t="+Date.now()}
+</script></body></html>
