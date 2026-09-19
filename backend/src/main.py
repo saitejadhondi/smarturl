@@ -5,70 +5,93 @@ import secrets
 import string
 
 import qrcode
+
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, HttpUrl
 
-from src.config import settings
 from src.repositories.url_repository import URLRepository
-from src.services.rate_limiter import InMemoryRateLimiter
-from src.utils.security import classify_user_agent, validate_destination_url
 
 
-# ---------------------------------------------------------
-# Paths
-# ---------------------------------------------------------
+# =========================================================
+# PROJECT PATHS
+# =========================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CURRENT_FILE = Path(__file__).resolve()
+
+PROJECT_ROOT = CURRENT_FILE.parents[2]
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+
 FRONTEND_STATIC_DIR = FRONTEND_DIR / "static"
 
 
-# ---------------------------------------------------------
-# FastAPI Application
-# ---------------------------------------------------------
+# =========================================================
+# FASTAPI APPLICATION
+# =========================================================
 
 app = FastAPI(
     title="SmartURL",
-    description="Smart URL shortener with expiration, analytics and QR codes",
+    description=(
+        "Smart URL Shortener with expiration, "
+        "analytics and QR codes"
+    ),
     version="2.0.0",
 )
 
 
-# Serve frontend static files
-app.mount(
-    "/static",
-    StaticFiles(directory=str(FRONTEND_STATIC_DIR)),
-    name="static",
-)
-
+# =========================================================
+# REPOSITORY
+# =========================================================
 
 repository = URLRepository()
 
-rate_limiter = InMemoryRateLimiter(
-    settings.RATE_LIMIT_REQUESTS,
-    settings.RATE_LIMIT_WINDOW_SECONDS,
-)
+
+# =========================================================
+# STATIC FILES
+# =========================================================
+
+if FRONTEND_STATIC_DIR.exists():
+
+    app.mount(
+        "/static",
+        StaticFiles(
+            directory=str(FRONTEND_STATIC_DIR)
+        ),
+        name="static",
+    )
 
 
-# ---------------------------------------------------------
-# Request Models
-# ---------------------------------------------------------
+# =========================================================
+# REQUEST MODELS
+# =========================================================
 
 class CreateURLRequest(BaseModel):
+
     url: HttpUrl
+
     custom_alias: str | None = None
+
     expires_at: str | None = None
 
 
-# ---------------------------------------------------------
-# Helper Functions
-# ---------------------------------------------------------
+# =========================================================
+# HELPER FUNCTIONS
+# =========================================================
 
-def generate_short_code(length: int = 6) -> str:
-    characters = string.ascii_letters + string.digits
+def generate_short_code(
+    length: int = 6,
+) -> str:
+
+    characters = (
+        string.ascii_letters
+        + string.digits
+    )
 
     return "".join(
         secrets.choice(characters)
@@ -76,59 +99,112 @@ def generate_short_code(length: int = 6) -> str:
     )
 
 
-def parse_expiration(value: str | None):
+def get_base_url(request: Request) -> str:
 
-    if not value:
+    return str(
+        request.base_url
+    ).rstrip("/")
+
+
+def parse_expiration(
+    expires_at: str | None,
+):
+
+    if not expires_at:
         return None
 
     try:
 
-        expiration = datetime.fromisoformat(
-            value.replace("Z", "+00:00")
+        expiration_time = datetime.fromisoformat(
+            expires_at.replace(
+                "Z",
+                "+00:00",
+            )
         )
 
-    except ValueError as exc:
+    except ValueError:
 
         raise HTTPException(
             status_code=400,
             detail="Invalid expiration timestamp",
-        ) from exc
+        )
 
-    if expiration.tzinfo is None:
+    if expiration_time.tzinfo is None:
 
-        expiration = expiration.replace(
+        expiration_time = expiration_time.replace(
             tzinfo=timezone.utc
         )
 
-    if expiration <= datetime.now(timezone.utc):
-
-        raise HTTPException(
-            status_code=400,
-            detail="Expiration time must be in the future",
-        )
-
-    return expiration
+    return expiration_time
 
 
-def check_rate_limit(request: Request):
+def classify_browser(
+    user_agent: str,
+) -> str:
 
-    client_ip = (
-        request.client.host
-        if request.client
-        else "unknown"
-    )
+    user_agent = (
+        user_agent or ""
+    ).lower()
 
-    if not rate_limiter.allow(client_ip):
+    if "edg/" in user_agent:
 
-        raise HTTPException(
-            status_code=429,
-            detail="Rate limit exceeded. Try again later.",
-        )
+        return "edge"
+
+    if "chrome" in user_agent:
+
+        return "chrome"
+
+    if "firefox" in user_agent:
+
+        return "firefox"
+
+    if "safari" in user_agent:
+
+        return "safari"
+
+    if "curl" in user_agent:
+
+        return "curl"
+
+    if "postman" in user_agent:
+
+        return "postman"
+
+    return "other"
 
 
-# ---------------------------------------------------------
-# Health Check
-# ---------------------------------------------------------
+def classify_device(
+    user_agent: str,
+) -> str:
+
+    user_agent = (
+        user_agent or ""
+    ).lower()
+
+    mobile_keywords = [
+        "mobile",
+        "android",
+        "iphone",
+        "ipad",
+        "ipod",
+    ]
+
+    for keyword in mobile_keywords:
+
+        if keyword in user_agent:
+
+            return "mobile"
+
+    if "tablet" in user_agent:
+
+        return "tablet"
+
+    return "desktop"
+
+
+# =========================================================
+# HEALTH CHECK
+# =========================================================
 
 @app.get("/")
 def health_check():
@@ -136,58 +212,29 @@ def health_check():
     return {
         "application": "SmartURL",
         "status": "running",
-        "version": app.version,
+        "version": "2.0.0",
     }
 
 
-# ---------------------------------------------------------
-# Dashboard
-# ---------------------------------------------------------
-
-@app.get(
-    "/dashboard",
-    include_in_schema=False
-)
-def dashboard():
-
-    return FileResponse(
-        str(FRONTEND_DIR / "index.html")
-    )
-
-
-# ---------------------------------------------------------
-# Create Short URL
-# ---------------------------------------------------------
+# =========================================================
+# CREATE SHORT URL
+# =========================================================
 
 @app.post("/urls")
 def create_short_url(
-    data: CreateURLRequest,
+    request_data: CreateURLRequest,
     request: Request,
 ):
 
-    check_rate_limit(request)
+    # -----------------------------------------------------
+    # Generate or validate short code
+    # -----------------------------------------------------
 
-    destination = str(data.url)
+    if request_data.custom_alias:
 
-    safe, reason = validate_destination_url(
-        destination
-    )
-
-    if not safe:
-
-        raise HTTPException(
-            status_code=400,
-            detail=reason,
+        short_code = (
+            request_data.custom_alias.strip()
         )
-
-
-    # -----------------------------------------------------
-    # Custom Alias
-    # -----------------------------------------------------
-
-    if data.custom_alias:
-
-        short_code = data.custom_alias.strip()
 
         if not short_code:
 
@@ -196,61 +243,18 @@ def create_short_url(
                 detail="Custom alias cannot be empty",
             )
 
-        if len(short_code) > 50:
-
-            raise HTTPException(
-                status_code=400,
-                detail="Custom alias must contain 1 to 50 characters",
+        existing_url = (
+            repository.find_by_short_code(
+                short_code
             )
-
-        if not short_code.replace(
-            "-",
-            ""
-        ).replace(
-            "_",
-            ""
-        ).isalnum():
-
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Alias may contain letters, "
-                    "numbers, hyphens and underscores"
-                ),
-            )
-
-        reserved_aliases = {
-            "analytics",
-            "qr",
-            "docs",
-            "redoc",
-            "dashboard",
-            "static",
-            "urls",
-        }
-
-        if short_code in reserved_aliases:
-
-            raise HTTPException(
-                status_code=400,
-                detail="This alias is reserved",
-            )
-
-        existing = repository.find_by_short_code(
-            short_code
         )
 
-        if existing:
+        if existing_url:
 
             raise HTTPException(
                 status_code=409,
                 detail="Custom alias already exists",
             )
-
-
-    # -----------------------------------------------------
-    # Random Short Code
-    # -----------------------------------------------------
 
     else:
 
@@ -258,86 +262,119 @@ def create_short_url(
 
             short_code = generate_short_code()
 
-            existing = repository.find_by_short_code(
-                short_code
+            existing_url = (
+                repository.find_by_short_code(
+                    short_code
+                )
             )
 
-            if not existing:
+            if not existing_url:
 
                 break
 
-
     # -----------------------------------------------------
-    # Expiration
+    # Validate expiration
     # -----------------------------------------------------
 
-    expiration = parse_expiration(
-        data.expires_at
+    expiration_time = parse_expiration(
+        request_data.expires_at
     )
 
+    if expiration_time:
+
+        current_time = datetime.now(
+            timezone.utc
+        )
+
+        if expiration_time <= current_time:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Expiration time must be "
+                    "in the future"
+                ),
+            )
 
     # -----------------------------------------------------
-    # Save URL
+    # Store URL
     # -----------------------------------------------------
 
     url_data = {
 
         "shortCode": short_code,
 
-        "longUrl": destination,
+        "longUrl": str(
+            request_data.url
+        ),
 
         "createdAt": datetime.now(
             timezone.utc
         ).isoformat(),
 
-        "expiresAt": (
-            expiration.isoformat()
-            if expiration
-            else None
-        ),
+        "expiresAt": request_data.expires_at,
 
         "clickCount": 0,
 
         "status": "ACTIVE",
     }
 
-
     repository.save(
         url_data
     )
 
+    # -----------------------------------------------------
+    # Build public URLs dynamically
+    #
+    # This prevents localhost:8000 from being returned
+    # when the application is accessed through EC2.
+    # -----------------------------------------------------
+
+    base_url = get_base_url(
+        request
+    )
+
+    short_url = (
+        f"{base_url}/{short_code}"
+    )
+
+    analytics_url = (
+        f"{base_url}/analytics/{short_code}"
+    )
+
+    qr_url = (
+        f"{base_url}/qr/{short_code}"
+    )
 
     return {
 
-        "message": "Short URL created successfully",
+        "message": (
+            "Short URL created successfully"
+        ),
 
         "data": url_data,
 
-        "shortUrl": (
-            f"{settings.BASE_URL}/{short_code}"
-        ),
+        "shortUrl": short_url,
 
-        "analyticsUrl": (
-            f"{settings.BASE_URL}/analytics/{short_code}"
-        ),
+        "analyticsUrl": analytics_url,
 
-        "qrUrl": (
-            f"{settings.BASE_URL}/qr/{short_code}"
-        ),
+        "qrUrl": qr_url,
     }
 
 
-# ---------------------------------------------------------
-# URL Details
-# ---------------------------------------------------------
+# =========================================================
+# GET URL DETAILS
+# =========================================================
 
 @app.get("/urls/{short_code}")
 def get_url_details(
-    short_code: str
+    short_code: str,
 ):
 
-    url_data = repository.find_by_short_code(
-        short_code
+    url_data = (
+        repository.find_by_short_code(
+            short_code
+        )
     )
 
     if not url_data:
@@ -352,17 +389,23 @@ def get_url_details(
     }
 
 
-# ---------------------------------------------------------
-# Analytics
-# ---------------------------------------------------------
+# =========================================================
+# ANALYTICS
+# =========================================================
 
 @app.get("/analytics/{short_code}")
 def get_analytics(
-    short_code: str
+    short_code: str,
 ):
 
-    url_data = repository.find_by_short_code(
-        short_code
+    # -----------------------------------------------------
+    # Find URL
+    # -----------------------------------------------------
+
+    url_data = (
+        repository.find_by_short_code(
+            short_code
+        )
     )
 
     if not url_data:
@@ -372,69 +415,100 @@ def get_analytics(
             detail="Short URL not found",
         )
 
+    # -----------------------------------------------------
+    # Get click events
+    # -----------------------------------------------------
 
     clicks = repository.get_clicks(
         short_code
     )
 
+    # -----------------------------------------------------
+    # Sort clicks chronologically
+    # -----------------------------------------------------
 
     clicks.sort(
         key=lambda click: click.get(
             "timestamp",
-            ""
+            "",
         )
     )
 
+    # -----------------------------------------------------
+    # Analytics counters
+    # -----------------------------------------------------
 
-    browsers = {}
+    browser_counts = {}
 
-    devices = {}
+    device_counts = {}
 
-    referrers = {}
-
+    referrer_counts = {}
 
     for click in clicks:
 
-        classification = classify_user_agent(
-            click.get(
-                "userAgent",
-                ""
-            )
+        user_agent = click.get(
+            "userAgent",
+            "unknown",
         )
-
-
-        browser = classification["browser"]
-
-        browsers[browser] = (
-            browsers.get(
-                browser,
-                0
-            ) + 1
-        )
-
-
-        device = classification["device"]
-
-        devices[device] = (
-            devices.get(
-                device,
-                0
-            ) + 1
-        )
-
 
         referrer = click.get(
             "referrer",
-            "direct"
+            "direct",
         )
 
-        referrers[referrer] = (
-            referrers.get(
+        browser = classify_browser(
+            user_agent
+        )
+
+        device = classify_device(
+            user_agent
+        )
+
+        browser_counts[browser] = (
+            browser_counts.get(
+                browser,
+                0,
+            )
+            + 1
+        )
+
+        device_counts[device] = (
+            device_counts.get(
+                device,
+                0,
+            )
+            + 1
+        )
+
+        referrer_counts[referrer] = (
+            referrer_counts.get(
                 referrer,
-                0
-            ) + 1
+                0,
+            )
+            + 1
         )
 
+    # -----------------------------------------------------
+    # First and last click
+    # -----------------------------------------------------
+
+    first_click = None
+
+    last_click = None
+
+    if clicks:
+
+        first_click = clicks[0].get(
+            "timestamp"
+        )
+
+        last_click = clicks[-1].get(
+            "timestamp"
+        )
+
+    # -----------------------------------------------------
+    # Return analytics
+    # -----------------------------------------------------
 
     return {
 
@@ -450,46 +524,45 @@ def get_analytics(
 
         "clickCount": url_data.get(
             "clickCount",
-            0
+            0,
         ),
 
         "analyticsEventCount": len(
             clicks
         ),
 
-        "firstClick": (
-            clicks[0].get("timestamp")
-            if clicks
-            else None
-        ),
+        "firstClick": first_click,
 
-        "lastClick": (
-            clicks[-1].get("timestamp")
-            if clicks
-            else None
-        ),
+        "lastClick": last_click,
 
-        "browsers": browsers,
+        "browsers": browser_counts,
 
-        "devices": devices,
+        "devices": device_counts,
 
-        "referrers": referrers,
+        "referrers": referrer_counts,
 
         "clicks": clicks,
     }
 
 
-# ---------------------------------------------------------
-# QR Code
-# ---------------------------------------------------------
+# =========================================================
+# QR CODE
+# =========================================================
 
 @app.get("/qr/{short_code}")
-def generate_qr(
-    short_code: str
+def generate_qr_code(
+    short_code: str,
+    request: Request,
 ):
 
-    url_data = repository.find_by_short_code(
-        short_code
+    # -----------------------------------------------------
+    # Find URL
+    # -----------------------------------------------------
+
+    url_data = (
+        repository.find_by_short_code(
+            short_code
+        )
     )
 
     if not url_data:
@@ -499,26 +572,38 @@ def generate_qr(
             detail="Short URL not found",
         )
 
+    # -----------------------------------------------------
+    # Build public SmartURL dynamically
+    # -----------------------------------------------------
 
-    smart_url = (
-        f"{settings.BASE_URL}/{short_code}"
+    base_url = get_base_url(
+        request
     )
 
+    smart_url = (
+        f"{base_url}/{short_code}"
+    )
+
+    # -----------------------------------------------------
+    # Generate QR code
+    # -----------------------------------------------------
 
     image = qrcode.make(
         smart_url
     )
 
-
     buffer = BytesIO()
 
     image.save(
         buffer,
-        format="PNG"
+        format="PNG",
     )
 
     buffer.seek(0)
 
+    # -----------------------------------------------------
+    # Return PNG
+    # -----------------------------------------------------
 
     return StreamingResponse(
         buffer,
@@ -531,9 +616,9 @@ def generate_qr(
     )
 
 
-# ---------------------------------------------------------
-# Redirect
-# ---------------------------------------------------------
+# =========================================================
+# REDIRECT
+# =========================================================
 
 @app.get("/{short_code}")
 def redirect_to_original_url(
@@ -541,10 +626,15 @@ def redirect_to_original_url(
     request: Request,
 ):
 
-    url_data = repository.find_by_short_code(
-        short_code
-    )
+    # -----------------------------------------------------
+    # Find URL
+    # -----------------------------------------------------
 
+    url_data = (
+        repository.find_by_short_code(
+            short_code
+        )
+    )
 
     if not url_data:
 
@@ -553,6 +643,9 @@ def redirect_to_original_url(
             detail="Short URL not found",
         )
 
+    # -----------------------------------------------------
+    # Check status
+    # -----------------------------------------------------
 
     if url_data.get(
         "status"
@@ -560,44 +653,30 @@ def redirect_to_original_url(
 
         raise HTTPException(
             status_code=410,
-            detail="Short URL is no longer active",
+            detail=(
+                "Short URL is no longer active"
+            ),
         )
 
+    # -----------------------------------------------------
+    # Check expiration
+    # -----------------------------------------------------
 
     expires_at = url_data.get(
         "expiresAt"
     )
 
-
     if expires_at:
 
-        try:
+        expiration_time = parse_expiration(
+            expires_at
+        )
 
-            expiration = datetime.fromisoformat(
-                expires_at.replace(
-                    "Z",
-                    "+00:00"
-                )
-            )
-
-        except ValueError as exc:
-
-            raise HTTPException(
-                status_code=500,
-                detail="Invalid expiration timestamp",
-            ) from exc
-
-
-        if expiration.tzinfo is None:
-
-            expiration = expiration.replace(
-                tzinfo=timezone.utc
-            )
-
-
-        if datetime.now(
+        current_time = datetime.now(
             timezone.utc
-        ) >= expiration:
+        )
+
+        if current_time >= expiration_time:
 
             repository.mark_expired(
                 short_code
@@ -605,18 +684,22 @@ def redirect_to_original_url(
 
             raise HTTPException(
                 status_code=410,
-                detail="Short URL has expired",
+                detail=(
+                    "Short URL has expired"
+                ),
             )
 
-
     # -----------------------------------------------------
-    # Click Tracking
+    # Increment click counter
     # -----------------------------------------------------
 
     repository.increment_click_count(
         short_code
     )
 
+    # -----------------------------------------------------
+    # Store analytics event
+    # -----------------------------------------------------
 
     repository.record_click(
 
@@ -624,17 +707,52 @@ def redirect_to_original_url(
 
         user_agent=request.headers.get(
             "user-agent",
-            ""
+            "",
         ),
 
         referrer=request.headers.get(
             "referer",
-            ""
+            "",
         ),
     )
 
+    # -----------------------------------------------------
+    # Redirect
+    # -----------------------------------------------------
 
     return RedirectResponse(
-        url=url_data["longUrl"],
+
+        url=url_data[
+            "longUrl"
+        ],
+
         status_code=302,
+    )
+
+
+# =========================================================
+# DASHBOARD
+# =========================================================
+
+@app.get(
+    "/dashboard",
+    include_in_schema=False,
+)
+def dashboard():
+
+    dashboard_file = (
+        FRONTEND_DIR / "index.html"
+    )
+
+    if not dashboard_file.exists():
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Dashboard frontend not found"
+            ),
+        )
+
+    return FileResponse(
+        str(dashboard_file)
     )
