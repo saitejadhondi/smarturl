@@ -1,8 +1,8 @@
+import io
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-
-import io
 
 import qrcode
 
@@ -11,17 +11,24 @@ from fastapi import (
     HTTPException,
     Request,
 )
+
 from fastapi.responses import (
     FileResponse,
     RedirectResponse,
     StreamingResponse,
 )
+
 from fastapi.staticfiles import StaticFiles
+
 from pydantic import BaseModel, HttpUrl
 
 from src.repositories.url_repository import URLRepository
+
 from src.services.rate_limiter import RateLimiter
-from src.services.validation_service import URLValidationService
+
+from src.services.validation_service import (
+    URLValidationService,
+)
 
 
 # ============================================================
@@ -42,9 +49,13 @@ app = FastAPI(
 # Paths
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(
+    __file__
+).resolve().parents[2]
 
-FRONTEND_DIR = PROJECT_ROOT / "frontend"
+FRONTEND_DIR = (
+    PROJECT_ROOT / "frontend"
+)
 
 FRONTEND_STATIC_DIR = (
     FRONTEND_DIR / "static"
@@ -57,7 +68,9 @@ FRONTEND_STATIC_DIR = (
 
 repository = URLRepository()
 
-validation_service = URLValidationService()
+validation_service = (
+    URLValidationService()
+)
 
 rate_limiter = RateLimiter(
     max_requests=10,
@@ -66,7 +79,7 @@ rate_limiter = RateLimiter(
 
 
 # ============================================================
-# Static files
+# Static Files
 # ============================================================
 
 if FRONTEND_STATIC_DIR.exists():
@@ -102,16 +115,6 @@ class CreateURLRequest(BaseModel):
 def get_client_ip(
     request: Request,
 ) -> str:
-    """
-    Get the client IP address.
-
-    For the current EC2 setup we use the direct
-    client host address.
-
-    Later, when Nginx/reverse proxy is added,
-    this can be extended to safely handle
-    forwarded headers.
-    """
 
     if request.client:
 
@@ -122,21 +125,23 @@ def get_client_ip(
 
 def ensure_future_expiration(
     expires_at: Optional[datetime],
-) -> Optional[datetime]:
-    """
-    Validate expiration timestamp.
-    """
+):
 
     if expires_at is None:
+
         return None
 
     if expires_at.tzinfo is None:
 
-        expires_at = expires_at.replace(
-            tzinfo=timezone.utc
+        expires_at = (
+            expires_at.replace(
+                tzinfo=timezone.utc
+            )
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(
+        timezone.utc
+    )
 
     if expires_at <= now:
 
@@ -151,8 +156,44 @@ def ensure_future_expiration(
     return expires_at
 
 
+def is_expired(
+    expires_at,
+) -> bool:
+
+    if not expires_at:
+
+        return False
+
+    try:
+
+        expiration_datetime = (
+            datetime.fromisoformat(
+                str(expires_at)
+            )
+        )
+
+        if expiration_datetime.tzinfo is None:
+
+            expiration_datetime = (
+                expiration_datetime.replace(
+                    tzinfo=timezone.utc
+                )
+            )
+
+        return (
+            expiration_datetime
+            <= datetime.now(
+                timezone.utc
+            )
+        )
+
+    except ValueError:
+
+        return False
+
+
 # ============================================================
-# Root / Health Check
+# Health Check
 # ============================================================
 
 @app.get("/")
@@ -200,18 +241,14 @@ def create_short_url(
     request_data: CreateURLRequest,
     request: Request,
 ):
-    """
-    Create a new shortened URL.
-
-    Rate limit:
-        10 requests per minute per IP.
-    """
 
     # --------------------------------------------------------
     # Rate limiting
     # --------------------------------------------------------
 
-    client_ip = get_client_ip(request)
+    client_ip = get_client_ip(
+        request
+    )
 
     if not rate_limiter.is_allowed(
         client_ip
@@ -230,7 +267,7 @@ def create_short_url(
         )
 
     # --------------------------------------------------------
-    # Validate destination URL
+    # URL validation
     # --------------------------------------------------------
 
     destination_url = str(
@@ -251,7 +288,7 @@ def create_short_url(
         )
 
     # --------------------------------------------------------
-    # Validate custom alias
+    # Alias validation
     # --------------------------------------------------------
 
     custom_alias = (
@@ -260,7 +297,9 @@ def create_short_url(
 
     if custom_alias:
 
-        custom_alias = custom_alias.strip()
+        custom_alias = (
+            custom_alias.strip()
+        )
 
         is_valid_alias, alias_error = (
             validation_service.validate_alias(
@@ -274,10 +313,6 @@ def create_short_url(
                 status_code=400,
                 detail=alias_error,
             )
-
-        # ----------------------------------------------------
-        # Check duplicate alias
-        # ----------------------------------------------------
 
         existing_url = (
             repository.get_url(
@@ -295,11 +330,13 @@ def create_short_url(
             )
 
     # --------------------------------------------------------
-    # Validate expiration
+    # Expiration
     # --------------------------------------------------------
 
-    expires_at = ensure_future_expiration(
-        request_data.expires_at
+    expires_at = (
+        ensure_future_expiration(
+            request_data.expires_at
+        )
     )
 
     # --------------------------------------------------------
@@ -309,9 +346,18 @@ def create_short_url(
     try:
 
         result = repository.create_url(
-            original_url=destination_url,
-            custom_alias=custom_alias,
-            expires_at=expires_at,
+
+            original_url=(
+                destination_url
+            ),
+
+            custom_alias=(
+                custom_alias
+            ),
+
+            expires_at=(
+                expires_at
+            ),
         )
 
     except ValueError as error:
@@ -339,14 +385,21 @@ def create_short_url(
     # Response
     # --------------------------------------------------------
 
-    short_code = result["shortCode"]
+    short_code = result[
+        "shortCode"
+    ]
 
     return {
-        "message": "Short URL created successfully",
+
+        "message": (
+            "Short URL created successfully"
+        ),
 
         "shortCode": short_code,
 
-        "originalUrl": destination_url,
+        "originalUrl": (
+            destination_url
+        ),
 
         "shortUrl": (
             f"/{short_code}"
@@ -361,7 +414,9 @@ def create_short_url(
         ),
 
         "expiresAt": (
-            result.get("expiresAt")
+            result.get(
+                "expiresAt"
+            )
         ),
     }
 
@@ -370,7 +425,9 @@ def create_short_url(
 # Get URL Information
 # ============================================================
 
-@app.get("/urls/{short_code}")
+@app.get(
+    "/urls/{short_code}"
+)
 def get_url(
     short_code: str,
 ):
@@ -418,18 +475,24 @@ def get_analytics(
     )
 
     return {
+
         "shortCode": short_code,
 
         "originalUrl": (
-            url_data.get("originalUrl")
+            url_data.get(
+                "originalUrl"
+            )
         ),
 
         "clickCount": (
-            url_data.get("clickCount", 0)
+            url_data.get(
+                "clickCount",
+                0,
+            )
         ),
 
-        "totalAnalyticsEvents": len(
-            clicks
+        "totalAnalyticsEvents": (
+            len(clicks)
         ),
 
         "firstClick": (
@@ -457,6 +520,7 @@ def get_analytics(
 )
 def generate_qr_code(
     short_code: str,
+    request: Request,
 ):
 
     url_data = repository.get_url(
@@ -471,55 +535,33 @@ def generate_qr_code(
         )
 
     # --------------------------------------------------------
-    # Check expiration
+    # Expiration
     # --------------------------------------------------------
 
-    expires_at = url_data.get(
-        "expiresAt"
-    )
+    if is_expired(
+        url_data.get(
+            "expiresAt"
+        )
+    ):
 
-    if expires_at:
+        repository.mark_expired(
+            short_code
+        )
 
-        try:
-
-            expiration_datetime = (
-                datetime.fromisoformat(
-                    expires_at
-                )
-            )
-
-            if expiration_datetime.tzinfo is None:
-
-                expiration_datetime = (
-                    expiration_datetime.replace(
-                        tzinfo=timezone.utc
-                    )
-                )
-
-            now = datetime.now(
-                timezone.utc
-            )
-
-            if expiration_datetime <= now:
-
-                raise HTTPException(
-                    status_code=410,
-                    detail=(
-                        "Short URL has expired"
-                    ),
-                )
-
-        except ValueError:
-
-            pass
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Short URL has expired"
+            ),
+        )
 
     # --------------------------------------------------------
-    # Build QR destination
+    # Build short URL
     # --------------------------------------------------------
 
-    base_url = (
-        "http://100.53.178.159:8000"
-    )
+    base_url = str(
+        request.base_url
+    ).rstrip("/")
 
     redirect_url = (
         f"{base_url}/{short_code}"
@@ -574,14 +616,6 @@ def redirect_short_url(
     short_code: str,
     request: Request,
 ):
-    """
-    Redirect the user to the original URL.
-
-    Also:
-        1. Check expiration
-        2. Atomically increment click count
-        3. Store analytics event
-    """
 
     url_data = repository.get_url(
         short_code
@@ -595,51 +629,25 @@ def redirect_short_url(
         )
 
     # --------------------------------------------------------
-    # Check expiration
+    # Expiration
     # --------------------------------------------------------
 
-    expires_at = url_data.get(
-        "expiresAt"
-    )
+    if is_expired(
+        url_data.get(
+            "expiresAt"
+        )
+    ):
 
-    if expires_at:
+        repository.mark_expired(
+            short_code
+        )
 
-        try:
-
-            expiration_datetime = (
-                datetime.fromisoformat(
-                    expires_at
-                )
-            )
-
-            if expiration_datetime.tzinfo is None:
-
-                expiration_datetime = (
-                    expiration_datetime.replace(
-                        tzinfo=timezone.utc
-                    )
-                )
-
-            now = datetime.now(
-                timezone.utc
-            )
-
-            if expiration_datetime <= now:
-
-                repository.mark_expired(
-                    short_code
-                )
-
-                raise HTTPException(
-                    status_code=410,
-                    detail=(
-                        "Short URL has expired"
-                    ),
-                )
-
-        except ValueError:
-
-            pass
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Short URL has expired"
+            ),
+        )
 
     # --------------------------------------------------------
     # Increment click count
@@ -659,25 +667,38 @@ def redirect_short_url(
         )
 
     # --------------------------------------------------------
-    # Record analytics event
+    # Record analytics
     # --------------------------------------------------------
 
     try:
 
-        user_agent = request.headers.get(
-            "user-agent",
-            "",
+        user_agent = (
+            request.headers.get(
+                "user-agent",
+                "",
+            )
         )
 
-        referrer = request.headers.get(
-            "referer",
-            "",
+        referrer = (
+            request.headers.get(
+                "referer",
+                "",
+            )
         )
 
         repository.record_click(
-            short_code=short_code,
-            user_agent=user_agent,
-            referrer=referrer,
+
+            short_code=(
+                short_code
+            ),
+
+            user_agent=(
+                user_agent
+            ),
+
+            referrer=(
+                referrer
+            ),
         )
 
     except Exception as error:
@@ -692,6 +713,8 @@ def redirect_short_url(
     # --------------------------------------------------------
 
     return RedirectResponse(
-        url=url_data["originalUrl"],
+        url=url_data[
+            "originalUrl"
+        ],
         status_code=302,
     )
