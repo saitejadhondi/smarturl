@@ -7,6 +7,11 @@ Globals:
     Runtime: python3.12
     Timeout: 10
     MemorySize: 256
+    Environment:
+      Variables:
+        URL_TABLE_NAME: !Ref SmartURLUrls
+        CLICK_TABLE_NAME: !Ref SmartURLClicks
+        BASE_URL: !Sub https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod
 
 Resources:
   SmartURLFunction:
@@ -14,9 +19,54 @@ Resources:
     Properties:
       CodeUri: backend/
       Handler: src.main.lambda_handler
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt SmartURLUrls.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:Query
+              Resource: !GetAtt SmartURLClicks.Arn
       Events:
+        RootApi:
+          Type: Api
+          Properties:
+            Path: /
+            Method: ANY
         Api:
           Type: Api
           Properties:
             Path: /{proxy+}
             Method: ANY
+
+  SmartURLUrls:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: shortCode
+          AttributeType: S
+      KeySchema:
+        - AttributeName: shortCode
+          KeyType: HASH
+
+  SmartURLClicks:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: shortCode
+          AttributeType: S
+        - AttributeName: clickId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: shortCode
+          KeyType: HASH
+        - AttributeName: clickId
+          KeyType: RANGE

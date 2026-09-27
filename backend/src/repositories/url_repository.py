@@ -8,7 +8,7 @@ import boto3
 
 from boto3.dynamodb.conditions import Key
 
-from src.config import settings
+from ..config import settings
 
 
 class URLRepository:

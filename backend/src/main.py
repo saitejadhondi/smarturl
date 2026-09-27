@@ -15,18 +15,21 @@ from fastapi import (
 from fastapi.responses import (
     FileResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 
 from fastapi.staticfiles import StaticFiles
+from mangum import Mangum
 
 from pydantic import BaseModel, HttpUrl
 
-from src.repositories.url_repository import URLRepository
+from .config import settings
+from .repositories.url_repository import URLRepository
 
-from src.services.rate_limiter import RateLimiter
+from .services.rate_limiter import RateLimiter
 
-from src.services.validation_service import (
+from .services.validation_service import (
     URLValidationService,
 )
 
@@ -73,8 +76,8 @@ validation_service = (
 )
 
 rate_limiter = RateLimiter(
-    max_requests=10,
-    window_seconds=60,
+    max_requests=settings.RATE_LIMIT_REQUESTS,
+    window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
 )
 
 
@@ -92,6 +95,18 @@ if FRONTEND_STATIC_DIR.exists():
             )
         ),
         name="static",
+    )
+
+if FRONTEND_DIR.exists():
+
+    app.mount(
+        "/assets",
+        StaticFiles(
+            directory=str(
+                FRONTEND_DIR
+            )
+        ),
+        name="assets",
     )
 
 
@@ -206,6 +221,17 @@ def health_check():
     }
 
 
+@app.get(
+    "/favicon.ico",
+    include_in_schema=False,
+)
+def favicon():
+
+    return Response(
+        status_code=204
+    )
+
+
 # ============================================================
 # Dashboard
 # ============================================================
@@ -258,11 +284,13 @@ def create_short_url(
             status_code=429,
             detail=(
                 "Rate limit exceeded. "
-                "Maximum 10 URL creation "
-                "requests are allowed per minute."
+                f"Maximum {settings.RATE_LIMIT_REQUESTS} URL creation "
+                f"requests are allowed per {settings.RATE_LIMIT_WINDOW_SECONDS} seconds."
             ),
             headers={
-                "Retry-After": "60"
+                "Retry-After": str(
+                    settings.RATE_LIMIT_WINDOW_SECONDS
+                )
             },
         )
 
@@ -389,6 +417,8 @@ def create_short_url(
         "shortCode"
     ]
 
+    base_url = settings.BASE_URL
+
     return {
 
         "message": (
@@ -402,15 +432,15 @@ def create_short_url(
         ),
 
         "shortUrl": (
-            f"/{short_code}"
+            f"{base_url}/{short_code}"
         ),
 
         "analyticsUrl": (
-            f"/analytics/{short_code}"
+            f"{base_url}/analytics/{short_code}"
         ),
 
         "qrUrl": (
-            f"/qr/{short_code}"
+            f"{base_url}/qr/{short_code}"
         ),
 
         "expiresAt": (
@@ -472,6 +502,9 @@ def get_analytics(
         repository.get_click_events(
             short_code
         )
+    )
+    clicks.sort(
+        key=lambda click: click.get("timestamp", "")
     )
 
     return {
@@ -718,3 +751,6 @@ def redirect_short_url(
         ],
         status_code=302,
     )
+
+
+lambda_handler = Mangum(app)

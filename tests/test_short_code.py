@@ -1,9 +1,4 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parents[1] / "backend" / "src"))
-
-from utils.short_code import generate_short_code
+from backend.src.utils.short_code import generate_short_code
 
 def test_short_code_length():
     assert len(generate_short_code()) == 6

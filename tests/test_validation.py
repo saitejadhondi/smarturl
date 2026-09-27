@@ -1,18 +1,13 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parents[1] / "backend" / "src"))
-
-from services.validation_service import validate_url
+from backend.src.services.validation_service import URLValidationService
 
 def test_valid_https_url():
-    assert validate_url("https://example.com")
+    assert URLValidationService.validate_url("https://example.com")[0]
 
 def test_valid_http_url():
-    assert validate_url("http://example.com")
+    assert URLValidationService.validate_url("http://example.com")[0]
 
 def test_invalid_scheme():
-    assert not validate_url("javascript:alert(1)")
+    assert not URLValidationService.validate_url("javascript:alert(1)")[0]
 
 def test_invalid_url():
-    assert not validate_url("not-a-url")
+    assert not URLValidationService.validate_url("not-a-url")[0]

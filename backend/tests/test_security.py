@@ -1,4 +1,7 @@
-from src.utils.security import validate_destination_url, classify_user_agent
+from backend.src.utils.security import (
+    classify_user_agent,
+    validate_destination_url,
+)
 
 def test_valid_url():
     ok, _ = validate_destination_url("https://example.com")
